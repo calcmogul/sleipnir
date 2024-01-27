@@ -156,7 +156,6 @@ void Newton(
     // Call user callbacks
     for (const auto& callback : callbacks) {
       if (callback({iterations, x, Eigen::VectorXd::Zero(0), g, H,
-                    Eigen::SparseMatrix<double>{},
                     Eigen::SparseMatrix<double>{}})) {
         status->exitCondition = SolverExitCondition::kCallbackRequestedStop;
         return;
@@ -169,7 +168,7 @@ void Newton(
     // Solve the Newton-KKT system
     //
     // [H][ pₖˣ] = −[∇f]
-    solver.Compute(H, 0, config.tolerance / 10.0);
+    solver.Compute(H);
     Eigen::VectorXd step = solver.Solve(rhs);
 
     // step = [ pₖˣ]
@@ -263,10 +262,9 @@ void Newton(
 
 #ifndef SLEIPNIR_DISABLE_DIAGNOSTICS
     if (config.diagnostics) {
-      PrintIterationDiagnostics(iterations, IterationMode::kNormal,
-                                innerIterEndTime - innerIterStartTime, E_0,
-                                f.Value(), 0.0, solver.HessianRegularization(),
-                                α, 0.0);
+      PrintIterationDiagnostics(
+          iterations, innerIterEndTime - innerIterStartTime, E_0, f.Value(),
+          0.0, solver.HessianRegularization(), α, 0.0);
     }
 #endif
 

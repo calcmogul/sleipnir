@@ -8,7 +8,6 @@
 #include <cmath>
 #include <ranges>
 #include <string>
-#include <utility>
 
 #include "sleipnir/util/Print.hpp"
 #include "sleipnir/util/small_vector.hpp"
@@ -32,7 +31,6 @@ enum class IterationMode : uint8_t {
  * Prints diagnostics for the current iteration.
  *
  * @param iterations Number of iterations.
- * @param mode Which mode the iteration was in.
  * @param time The iteration duration.
  * @param error The error.
  * @param cost The cost.
@@ -42,21 +40,19 @@ enum class IterationMode : uint8_t {
  * @param dual_α The dual step size.
  */
 template <typename Rep, typename Period = std::ratio<1>>
-void PrintIterationDiagnostics(int iterations, IterationMode mode,
+void PrintIterationDiagnostics(int iterations,
                                const std::chrono::duration<Rep, Period>& time,
                                double error, double cost, double infeasibility,
                                double δ, double primal_α, double dual_α) {
   if (iterations % 20 == 0) {
     sleipnir::println(
-        "{:^4}   {:^9}  {:^13}  {:^13}  {:^13}  {:^5}  {:^8}  {:^8}  {:^6}",
+        "{:^4}  {:^9}  {:^13}  {:^13}  {:^13}  {:^5}  {:^8}  {:^8}  {:^6}",
         "iter", "time (ms)", "error", "cost", "infeasibility", "reg",
         "primal α", "dual α", "bktrks");
-    sleipnir::println("{:=^96}", "");
+    sleipnir::println("{:=^95}", "");
   }
 
-  constexpr const char* kIterationModes[] = {" ", "s", "r"};
-  sleipnir::print("{:4}{}  {:9.3f}  {:13e}  {:13e}  {:13e}  ", iterations,
-                  kIterationModes[std::to_underlying(mode)],
+  sleipnir::print("{:4}  {:9.3f}  {:13e}  {:13e}  {:13e}  ", iterations,
                   ToMilliseconds(time), error, cost, infeasibility);
 
   // Print regularization
