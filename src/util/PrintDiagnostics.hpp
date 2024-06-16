@@ -11,10 +11,11 @@
 #include <string>
 #include <utility>
 
+#include <wpi/SmallVector.h>
+
 #include "sleipnir/util/Print.hpp"
 #include "sleipnir/util/SetupProfiler.hpp"
 #include "sleipnir/util/SolveProfiler.hpp"
-#include "sleipnir/util/small_vector.hpp"
 #include "util/ToMs.hpp"
 
 namespace sleipnir {
@@ -88,7 +89,7 @@ void PrintIterationDiagnostics(int iterations, IterationMode mode,
     } else {
       // Gather regularization exponent digits
       int n = std::abs(exponent);
-      small_vector<int> digits;
+      wpi::SmallVector<int> digits;
       do {
         digits.emplace_back(n % 10);
         n /= 10;
@@ -157,8 +158,8 @@ inline std::string Histogram(double value) {
  * @param solveProfilers Solve profilers.
  */
 inline void PrintFinalDiagnostics(
-    int iterations, const small_vector<SetupProfiler>& setupProfilers,
-    const small_vector<SolveProfiler>& solveProfilers) {
+    int iterations, const wpi::SmallVector<SetupProfiler>& setupProfilers,
+    const wpi::SmallVector<SolveProfiler>& solveProfilers) {
   // Print bottom of iteration diagnostics table
   sleipnir::println("└{:─^106}┘", "");
 
