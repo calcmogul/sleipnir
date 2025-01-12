@@ -9,7 +9,6 @@
 #include <cmath>
 #include <ranges>
 #include <string>
-#include <utility>
 
 #include "sleipnir/util/Print.hpp"
 #include "sleipnir/util/SetupProfiler.hpp"
@@ -72,7 +71,7 @@ void PrintIterationDiagnostics(int iterations, IterationMode mode,
 
   constexpr const char* kIterationModes[] = {"norm", "SOC"};
   sleipnir::print("│ {:4}   {:4}   {:9.3f}   {:12e}   {:12e}   {:13e}   ",
-                  iterations, kIterationModes[std::to_underlying(mode)],
+                  iterations, kIterationModes[static_cast<uint8_t>(mode)],
                   ToMs(time), error, cost, infeasibility);
 
   // Print regularization
