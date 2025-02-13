@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 
@@ -10,8 +11,6 @@
 #include <Eigen/SparseCore>
 
 #include "optimization/Inertia.hpp"
-
-// See docs/algorithms.md#Works_cited for citation definitions
 
 namespace sleipnir {
 
@@ -43,16 +42,10 @@ class RegularizedLDLT {
    */
   void Compute(const Eigen::SparseMatrix<double>& lhs,
                size_t numEqualityConstraints, double μ) {
-    // The regularization procedure is based on algorithm B.1 of [1]
-    m_numDecisionVariables = lhs.rows() - numEqualityConstraints;
-    m_numEqualityConstraints = numEqualityConstraints;
+    size_t numDecisionVariables = lhs.rows() - numEqualityConstraints;
 
-    const Inertia idealInertia{m_numDecisionVariables, m_numEqualityConstraints,
-                               0};
+    const Inertia idealInertia{numDecisionVariables, numEqualityConstraints, 0};
     Inertia inertia;
-
-    double δ = 0.0;
-    double γ = 0.0;
 
     AnalyzePattern(lhs);
     m_solver.factorize(lhs);
@@ -62,6 +55,7 @@ class RegularizedLDLT {
 
       // If the inertia is ideal, don't regularize the system
       if (inertia == idealInertia) {
+        m_D = m_solver.vectorD();
         m_info = Eigen::Success;
         return;
       }
@@ -71,46 +65,109 @@ class RegularizedLDLT {
     // or the decomposition failed, regularize the equality constraints
     if ((m_solver.info() == Eigen::Success && inertia.zero > 0) ||
         m_solver.info() != Eigen::Success) {
-      γ = 1e-8 * std::pow(μ, 0.25);
-    }
+      constexpr double δ = 1e-8;
+      double γ = 1e-8 * std::pow(μ, 0.25);
 
-    // Also regularize the Hessian. If the Hessian wasn't regularized in a
-    // previous run of Compute(), start at a small value of δ. Otherwise,
-    // attempt a δ half as big as the previous run so δ can trend downwards over
-    // time.
-    if (m_δOld == 0.0) {
-      δ = 1e-4;
-    } else {
-      δ = m_δOld / 2.0;
-    }
-
-    while (true) {
       // Regularize lhs by adding a multiple of the identity matrix
       //
       // lhs = [H + AᵢᵀΣAᵢ + δI   Aₑᵀ]
       //       [       Aₑ        −γI ]
-      Eigen::SparseMatrix<double> lhsReg = lhs + Regularization(δ, γ);
+      Eigen::VectorXd reg{lhs.rows()};
+      reg.segment(0, numDecisionVariables).setZero();
+      for (int row = numDecisionVariables; row < lhs.rows(); ++row) {
+        reg(row) = -γ;
+      }
+      Eigen::SparseMatrix<double> lhsReg =
+          lhs + Eigen::SparseMatrix<double>{reg.asDiagonal()};
+
       AnalyzePattern(lhsReg);
       m_solver.factorize(lhsReg);
-      inertia = Inertia{m_solver};
 
-      // If the inertia is ideal, store that value of δ and return.
-      // Otherwise, increase δ by an order of magnitude and try again.
-      if (inertia == idealInertia) {
-        m_δOld = δ;
-        m_info = Eigen::Success;
-        return;
-      } else {
-        δ *= 10.0;
+      if (m_solver.info() != Eigen::Success) {
+        for (size_t row = 0; row < numDecisionVariables; ++row) {
+          reg(row) = δ;
+        }
+        lhsReg = lhs + Eigen::SparseMatrix<double>{reg.asDiagonal()};
 
-        // If the Hessian perturbation is too high, report failure. This can be
-        // caused by ill-conditioning.
-        if (δ > 1e20) {
+        AnalyzePattern(lhsReg);
+        m_solver.factorize(lhsReg);
+
+        if (m_solver.info() != Eigen::Success) {
           m_info = Eigen::NumericalIssue;
           return;
         }
       }
     }
+
+    m_D = m_solver.permutationPinv() * m_solver.vectorD();
+    m_regularization = -2.0 * std::min(m_D.minCoeff(), 0.0);
+
+    // Regularize D from LDLᵀ
+    const double tol = std::sqrt(std::numeric_limits<double>::epsilon()) *
+                       m_D.lpNorm<Eigen::Infinity>();
+    for (size_t row = 0; row < numDecisionVariables; ++row) {
+      if (m_D(row) < -tol) {
+        // Large negative elements are shifted to their absolute value
+        m_D(row) = -m_D(row);
+      } else if (m_D(row) < tol) {
+        // Elements near zero (likely round-off error) are shifted to 1
+        m_D(row) = 1.0;
+      }
+      // Remaining elements are left as is
+    }
+    m_D = m_solver.permutationP() * m_D;
+  }
+
+  // We want to find x such that Ax = b.
+  //
+  //   x = A⁻¹b
+  //
+  // The pivoting LDLT decomposition of A is given by
+  //
+  //   PAP⁻¹ = LDLᵀ where Lᵀ = U
+  //
+  // Solve for A.
+  //
+  //   A = P⁻¹LDUP
+  //
+  // Find A⁻¹ using the property (ABC)⁻¹ = C⁻¹B⁻¹A⁻¹.
+  //
+  //   A⁻¹ = P⁻¹U⁻¹D⁻¹L⁻¹P
+  //
+  // Substitute A⁻¹ back into equation for x.
+  //
+  //   x = P⁻¹U⁻¹D⁻¹L⁻¹Pb
+
+  /**
+   * Solves the system of equations using a regularized LDLT factorization.
+   *
+   * @param rhs Right-hand side of the system.
+   */
+  template <typename Rhs>
+  Eigen::VectorXd Solve(const Eigen::MatrixBase<Rhs>& rhs) {
+    if (m_solver.info() != Eigen::Success) {
+      return Eigen::VectorXd::Zero(rhs.rows());
+    }
+
+    const auto& P = m_solver.permutationP();
+    const auto& Pinv = m_solver.permutationPinv();
+
+    Eigen::VectorXd x;
+    if (P.size() > 0) {
+      x = P * rhs;
+    } else {
+      x = rhs;
+    }
+    m_solver.matrixL().solveInPlace(x);
+    if (m_D.size() > 0) {
+      x = m_D.asDiagonal().inverse() * x;
+    }
+    m_solver.matrixU().solveInPlace(x);
+    if (Pinv.size() > 0) {
+      x = Pinv * x;
+    }
+
+    return x;
   }
 
   /**
@@ -119,38 +176,46 @@ class RegularizedLDLT {
    * @param rhs Right-hand side of the system.
    */
   template <typename Rhs>
-  auto Solve(const Eigen::MatrixBase<Rhs>& rhs) {
-    return m_solver.solve(rhs);
-  }
+  Eigen::VectorXd Solve(const Eigen::SparseMatrixBase<Rhs>& rhs) {
+    if (m_solver.info() != Eigen::Success) {
+      return Eigen::VectorXd::Zero(rhs.rows());
+    }
 
-  /**
-   * Solves the system of equations using a regularized LDLT factorization.
-   *
-   * @param rhs Right-hand side of the system.
-   */
-  template <typename Rhs>
-  auto Solve(const Eigen::SparseMatrixBase<Rhs>& rhs) {
-    return m_solver.solve(rhs);
+    const auto& P = m_solver.permutationP();
+    const auto& Pinv = m_solver.permutationPinv();
+
+    Eigen::VectorXd x;
+    if (P.size() > 0) {
+      x = P * rhs;
+    } else {
+      x = rhs;
+    }
+    m_solver.matrixL().solveInPlace(x);
+    if (m_D.size() > 0) {
+      x = m_D.asDiagonal().inverse() * x;
+    }
+    m_solver.matrixU().solveInPlace(x);
+    if (Pinv.size() > 0) {
+      x = Pinv * x;
+    }
+
+    return x;
   }
 
   /**
    * Returns the Hessian regularization factor.
    */
-  double HessianRegularization() const { return m_δOld; }
+  double HessianRegularization() const { return m_regularization; }
 
  private:
   Solver m_solver;
 
+  /// Regularized vector D from LDLᵀ.
+  Eigen::VectorXd m_D;
+
   Eigen::ComputationInfo m_info = Eigen::Success;
 
-  /// The number of decision variables in the system.
-  size_t m_numDecisionVariables = 0;
-
-  /// The number of equality constraints in the system.
-  size_t m_numEqualityConstraints = 0;
-
-  /// The value of δ from the previous run of Compute().
-  double m_δOld = 0.0;
+  double m_regularization = 0.0;
 
   // Number of non-zeros in LHS.
   int m_nonZeros = -1;
@@ -166,27 +231,6 @@ class RegularizedLDLT {
       m_solver.analyzePattern(lhs);
       m_nonZeros = nonZeros;
     }
-  }
-
-  /**
-   * Returns regularization matrix.
-   *
-   * @param δ The Hessian regularization factor.
-   * @param γ The equality constraint Jacobian regularization factor.
-   */
-  Eigen::SparseMatrix<double> Regularization(double δ, double γ) {
-    Eigen::VectorXd vec{m_numDecisionVariables + m_numEqualityConstraints};
-    size_t row = 0;
-    while (row < m_numDecisionVariables) {
-      vec(row) = δ;
-      ++row;
-    }
-    while (row < m_numDecisionVariables + m_numEqualityConstraints) {
-      vec(row) = -γ;
-      ++row;
-    }
-
-    return Eigen::SparseMatrix<double>{vec.asDiagonal()};
   }
 };
 

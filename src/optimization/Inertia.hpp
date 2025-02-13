@@ -32,6 +32,23 @@ class Inertia {
       : positive{positive}, negative{negative}, zero{zero} {}
 
   /**
+   * Constructs the Inertia type with the inertia of the given D vector.
+   *
+   * @param D The D vector from an LDLT decomposition.
+   */
+  explicit Inertia(const Eigen::VectorXd& D) {
+    for (int row = 0; row < D.rows(); ++row) {
+      if (D(row) > 0.0) {
+        ++positive;
+      } else if (D(row) < 0.0) {
+        ++negative;
+      } else {
+        ++zero;
+      }
+    }
+  }
+
+  /**
    * Constructs the Inertia type with the inertia of the given LDLT
    * decomposition.
    *
